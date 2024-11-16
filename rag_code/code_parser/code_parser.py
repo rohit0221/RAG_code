@@ -1,23 +1,21 @@
-import os
-from configs.logging_config import setup_logging  # Import logger setup
 import ast
+import logging
+import os
 from dotenv import load_dotenv
-
+from configs.logging_config import setup_logging
+import chardet
 # Load environment variables from .env file
 load_dotenv()
 
-logger = setup_logging()
-
 # Set up logging configuration
+logger = setup_logging()
 
 def parse_codebase(directory: str):
     """
     Parses Python code files in the given directory and extracts relevant details.
     Logs the progress and results.
     """
-    # logger.info(f"Started parsing the codebase at: {directory}")
     logger.info(f"Started parsing the codebase at: {os.path.abspath(directory)}")
-
     
     parsed_results = []
 
@@ -36,12 +34,10 @@ def parse_codebase(directory: str):
     
     return parsed_results
 
-import chardet
-
 def parse_python_file(file_path: str):
     """
     Parses a single Python file and extracts key information.
-    Logs function names from the file.
+    Logs function names, classes, and imports.
     """
     # Try to detect the file's encoding using chardet
     with open(file_path, "rb") as file:
@@ -59,11 +55,45 @@ def parse_python_file(file_path: str):
     # Parse the source code into an AST (Abstract Syntax Tree)
     tree = ast.parse(source_code)
     
-    # Example: Extract function names from the AST
-    functions = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-    
-    # Log the parsed information
-    logger.info(f"Parsed file: {file_path} - Found functions: {functions}")
-    
-    return f"File: {file_path} - Functions: {functions}"
+    # Initialize lists to store the extracted elements
+    functions = []
+    classes = []
+    imports = []
+    variables = []
 
+    # Walk through the AST and extract relevant data
+    for node in ast.walk(tree):
+        # Extract function definitions
+        if isinstance(node, ast.FunctionDef):
+            functions.append(node.name)
+
+        # Extract class definitions
+        elif isinstance(node, ast.ClassDef):
+            classes.append(node.name)
+
+        # Extract import statements
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.append(alias.name)
+        
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imports.append(f"{node.module}.{alias.name}")
+
+        # Extract top-level variables (assignments outside of functions/classes)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    variables.append(target.id)
+
+    # Log the parsed information
+    logger.info(f"Parsed file: {file_path} - Functions: {functions}, Classes: {classes}, Imports: {imports}, Variables: {variables}")
+    
+    # Return a structured data dictionary
+    return {
+        'file_path': file_path,
+        'functions': functions,
+        'classes': classes,
+        'imports': imports,
+        'variables': variables,
+    }
