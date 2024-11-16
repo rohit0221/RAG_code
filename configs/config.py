@@ -6,4 +6,5 @@ load_dotenv()
 
 # Read environment variables directly
 CODEBASE_PATH = os.getenv("CODEBASE_PATH")
-DEBUG = os.getenv("DEBUG", "False") == "True"  # Convert string 'True' to boolean
+LOG_LEVEL_CONSOLE = os.getenv("LOG_LEVEL_CONSOLE", "WARNING").upper()
+LOG_LEVEL_FILE = os.getenv("LOG_LEVEL_FILE", "DEBUG").upper()

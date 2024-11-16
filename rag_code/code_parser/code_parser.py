@@ -1,9 +1,10 @@
 import ast
-import logging
 import os
 from dotenv import load_dotenv
 from configs.logging_config import setup_logging
 import chardet
+
+from rag_code.code_parser.function_logging import log_parsed_file
 # Load environment variables from .env file
 load_dotenv()
 
@@ -37,63 +38,76 @@ def parse_codebase(directory: str):
 def parse_python_file(file_path: str):
     """
     Parses a single Python file and extracts key information.
-    Logs function names, classes, and imports.
+    Logs function names from the file along with their parameters, return types, docstrings, decorators,
+    and other relevant data.
     """
-    # Try to detect the file's encoding using chardet
-    with open(file_path, "rb") as file:
-        raw_data = file.read()
-        result = chardet.detect(raw_data)
-        encoding = result['encoding']
-    
-    try:
-        with open(file_path, "r", encoding=encoding) as file:
-            source_code = file.read()
-    except UnicodeDecodeError as e:
-        logger.error(f"Failed to read file {file_path} due to encoding error: {e}")
-        return None  # Or handle as needed
-    
-    # Parse the source code into an AST (Abstract Syntax Tree)
+    with open(file_path, "r", encoding="utf-8") as file:
+        source_code = file.read()
+
     tree = ast.parse(source_code)
-    
-    # Initialize lists to store the extracted elements
+
+    # Extracting functions and methods
     functions = []
-    classes = []
-    imports = []
-    variables = []
-
-    # Walk through the AST and extract relevant data
     for node in ast.walk(tree):
-        # Extract function definitions
         if isinstance(node, ast.FunctionDef):
-            functions.append(node.name)
+            func_info = {
+                "name": node.name,
+                "args": [arg.arg for arg in node.args.args],  # Function arguments
+                "returns": node.returns,  # Return type annotation
+                "docstring": ast.get_docstring(node),  # Function docstring
+                "decorators": [decorator.id for decorator in node.decorator_list if isinstance(decorator, ast.Name)],
+                "calls": extract_function_calls(node)  # Calls made within the function
+            }
+            functions.append(func_info)
 
-        # Extract class definitions
-        elif isinstance(node, ast.ClassDef):
-            classes.append(node.name)
+    # Extracting classes
+    classes = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            class_info = {
+                "name": node.name,
+                "methods": [method.name for method in node.body if isinstance(method, ast.FunctionDef)],
+                "docstring": ast.get_docstring(node),  # Class docstring
+            }
+            classes.append(class_info)
 
-        # Extract import statements
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(alias.name)
-        
+    # Extracting imports
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend([alias.name for alias in node.names])
         elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                imports.append(f"{node.module}.{alias.name}")
+            imports.extend([f"{node.module}.{n.name}" for n in node.names])  # Fixed list comprehension issue
 
-        # Extract top-level variables (assignments outside of functions/classes)
-        elif isinstance(node, ast.Assign):
+    # Extracting variables (assignments)
+    variables = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    variables.append(target.id)
+                    variables.append({
+                        "name": target.id,
+                        "value": ast.dump(node.value),  # Show value (could be further processed for types)
+                    })
 
-    # Log the parsed information
-    logger.info(f"Parsed file: {file_path} - Functions: {functions}, Classes: {classes}, Imports: {imports}, Variables: {variables}")
-    
-    # Return a structured data dictionary
+    # Log the collected information (invoking log_parsed_file)
+    log_parsed_file(file_path, functions, classes, imports, variables)
+
     return {
-        'file_path': file_path,
-        'functions': functions,
-        'classes': classes,
-        'imports': imports,
-        'variables': variables,
+        "functions": functions,
+        "classes": classes,
+        "imports": imports,
+        "variables": variables
     }
+
+def extract_function_calls(function_node):
+    """Helper function to extract function calls within a function."""
+    calls = []
+    for node in ast.walk(function_node):
+        if isinstance(node, ast.Call):
+            # Extract the function name or callable
+            if isinstance(node.func, ast.Name):
+                calls.append(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                calls.append(node.func.attr)  # For method calls on objects
+    return calls
