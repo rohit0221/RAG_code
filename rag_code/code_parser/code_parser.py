@@ -12,13 +12,14 @@ load_dotenv()
 logger = setup_logging()
 
 def parse_codebase(directory: str):
-    """
-    Parses Python code files in the given directory and extracts relevant details.
-    Logs the progress and results.
-    """
     logger.info(f"Started parsing the codebase at: {os.path.abspath(directory)}")
     
-    parsed_results = []
+    aggregated_results = {
+        "functions": [],
+        "classes": [],
+        "imports": [],
+        "variables": [],
+    }
 
     # Walk through the directory to find Python files
     for root, dirs, files in os.walk(directory):
@@ -26,15 +27,31 @@ def parse_codebase(directory: str):
             if file.endswith(".py"):  # Only process Python files
                 file_path = os.path.join(root, file)
                 logger.debug(f"Found Python file: {file_path}")
-                parsed_results.append(parse_python_file(file_path))
+                parsed_file_data = parse_python_file(file_path)
+
+                # Append the data for each category
+                aggregated_results["functions"].extend(parsed_file_data["functions"])
+                aggregated_results["classes"].extend(parsed_file_data["classes"])
+                aggregated_results["imports"].extend(parsed_file_data["imports"])
+                aggregated_results["variables"].extend(parsed_file_data["variables"])
+
+                # Debugging: print the size of the aggregated results
+                logger.debug(
+                    f"Aggregated so far: {len(aggregated_results['functions'])} functions, "
+                    f"{len(aggregated_results['classes'])} classes, "
+                    f"{len(aggregated_results['imports'])} imports, "
+                    f"{len(aggregated_results['variables'])} variables."
+                )
+
+    logger.info(f"Parsing complete. Total parsed: "
+                f"{len(aggregated_results['functions'])} functions, "
+                f"{len(aggregated_results['classes'])} classes, "
+                f"{len(aggregated_results['imports'])} imports, "
+                f"{len(aggregated_results['variables'])} variables.")
     
-    # After parsing, log the results
-    if parsed_results:
-        logger.info(f"Parsed {len(parsed_results)} files.")
-    else:
-        logger.warning(f"No Python files found in {directory}.")
-    
-    return parsed_results
+    return aggregated_results
+
+
 
 def parse_python_file(file_path: str):
     """
@@ -201,21 +218,11 @@ import json
 
 def save_parsed_data_jsonl(parsed_data, logs_dir="logs"):
     """
-    Save the parsed data into separate JSONL files for functions, classes, imports, and variables.
-    All data will go into a fixed folder, and files will be overwritten if they already exist.
-
-    Args:
-        parsed_data (dict): Parsed data containing 'functions', 'classes', 'imports', and 'variables'.
-        logs_dir (str): Path to the logs directory where files will be saved. Defaults to 'logs'.
-
-    Returns:
-        None
+    Save the aggregated parsed data into separate JSONL files.
     """
-    # Fixed subdirectory for storing the files
     output_dir = os.path.join(logs_dir, "parsed_data")
     os.makedirs(output_dir, exist_ok=True)
 
-    # File mappings
     data_files = {
         "functions": "functions.jsonl",
         "classes": "classes.jsonl",
@@ -223,13 +230,18 @@ def save_parsed_data_jsonl(parsed_data, logs_dir="logs"):
         "variables": "variables.jsonl",
     }
 
-    # Save each category in JSONL format
     for key, filename in data_files.items():
         file_path = os.path.join(output_dir, filename)
-        with open(file_path, "w", encoding="utf-8") as f:
-            for item in parsed_data.get(key, []):
-                f.write(json.dumps(item) + "\n")  # Write each item as a compact JSON object in a new line
-        print(f"Saved {key} data to {file_path}")
+        
+        # Open file in write mode
+        logger.info(f"Writing {key} data to {file_path}...")
+        
+        # Debugging: print the data size
+        logger.debug(f"{key.capitalize()} data size: {len(parsed_data.get(key, []))}")
 
-    # Inform about completion
-    print(f"All parsed data saved in JSONL format in folder: {output_dir}")
+        with open(file_path, "a", encoding="utf-8") as f:
+            for item in parsed_data.get(key, []):
+                f.write(json.dumps(item) + "\n")
+                logger.debug(f"Wrote {json.dumps(item)} to {file_path}")
+
+        logger.info(f"Saved {key} data to {file_path}")
