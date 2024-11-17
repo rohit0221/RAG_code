@@ -29,10 +29,11 @@ def store_in_graphdb(parsed_code):
     """
     Store parsed code information into a Neo4j graph database.
     """
-    functions = parsed_code[0]["functions"]
-    classes = parsed_code[0]["classes"]
-    imports = parsed_code[0]["imports"]
-    variables = parsed_code[0]["variables"]
+    # Accessing directly as a dictionary
+    functions = parsed_code.get("functions", [])
+    classes = parsed_code.get("classes", [])
+    imports = parsed_code.get("imports", [])
+    variables = parsed_code.get("variables", [])
 
     with driver.session() as session:
         # Create function nodes and relationships
@@ -52,6 +53,7 @@ def store_in_graphdb(parsed_code):
         # Create import nodes and relationships
         for imp in imports:
             session.write_transaction(create_import_node, imp)
+
 
 def create_function_node(tx, func):
     """Create a node for a function."""
