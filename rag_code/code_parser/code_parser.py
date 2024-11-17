@@ -1,3 +1,4 @@
+import json
 import ast
 import os
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ def parse_codebase(directory: str):
             if file.endswith(".py"):  # Only process Python files
                 file_path = os.path.join(root, file)
                 logger.debug(f"Found Python file: {file_path}")
-                parsed_file_data = parse_python_file(file_path)
+                parsed_file_data = parse_python_file(file_path, aggregated_results)
 
                 # Append the data for each category
                 aggregated_results["functions"].extend(parsed_file_data["functions"])
@@ -52,8 +53,39 @@ def parse_codebase(directory: str):
     return aggregated_results
 
 
+# Saving parsed data as JSONL (enhanced version to handle different types)
+def save_parsed_data_jsonl(parsed_data, logs_dir="logs"):
+    """
+    Save the aggregated parsed data into separate JSONL files.
+    """
+    output_dir = os.path.join(logs_dir, "parsed_data")
+    os.makedirs(output_dir, exist_ok=True)
 
-def parse_python_file(file_path: str):
+    data_files = {
+        "functions": "functions.jsonl",
+        "classes": "classes.jsonl",
+        "imports": "imports.jsonl",
+        "variables": "variables.jsonl",
+    }
+
+    for key, filename in data_files.items():
+        file_path = os.path.join(output_dir, filename)
+        
+        # Open file in append mode
+        logger.info(f"Writing {key} data to {file_path}...")
+        
+        # Debugging: print the data size
+        logger.debug(f"{key.capitalize()} data size: {len(parsed_data.get(key, []))} ")
+
+        with open(file_path, "a", encoding="utf-8") as f:
+            for item in parsed_data.get(key, []):
+                f.write(json.dumps(item) + "\n")
+                logger.debug(f"Wrote {json.dumps(item)} to {file_path}")
+
+        logger.info(f"Saved {key} data to {file_path}")
+
+
+def parse_python_file(file_path: str, aggregated_results: dict):
     """
     Parses a single Python file and extracts key information.
     Logs function names from the file along with their parameters, return types, docstrings, decorators,
@@ -89,12 +121,38 @@ def parse_python_file(file_path: str):
                 "returns": return_type,  # Return type annotation (now a string)
                 "docstring": ast.get_docstring(node),  # Function docstring
                 "decorators": [decorator.id for decorator in node.decorator_list if isinstance(decorator, ast.Name)],
-                "calls": extract_function_calls(node)  # Calls made within the function
+                "calls": extract_function_calls(node),  # Calls made within the function
+                "used_imports": [],
+                "used_variables": [],
             }
+
+            # Track imports and variables used in the function body
+            for stmt in node.body:
+                # Track function calls
+                if isinstance(stmt, ast.Call):  # Check for function calls
+                    func_called = stmt.func
+                    if isinstance(func_called, ast.Name):  # Direct function call like foo()
+                        if func_called.id in aggregated_results['imports']:  # Check against imports
+                            func_info['used_imports'].append(func_called.id)
+                    elif isinstance(func_called, ast.Attribute):  # Check for method calls
+                        if func_called.attr in aggregated_results['imports']:  # Method calls like foo.bar()
+                            func_info['used_imports'].append(func_called.attr)
+
+                # Track variable assignments
+                elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):  # Add AugAssign and AnnAssign
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            func_info['used_variables'].append(target.id)
+
+                # Track function arguments used as variables
+                elif isinstance(stmt, ast.arguments):
+                    for arg in stmt.args:
+                        func_info['used_variables'].append(arg.arg)
+
             logger.debug(f"Function info: {func_info}")
             functions.append(func_info)
 
-    # Extracting classes
+    # Extracting classes and methods
     classes = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -103,7 +161,19 @@ def parse_python_file(file_path: str):
                 "name": node.name,
                 "methods": [method.name for method in node.body if isinstance(method, ast.FunctionDef)],
                 "docstring": ast.get_docstring(node),  # Class docstring
+                "used_imports": [],
             }
+
+            # Track imports used in the class
+            for imp in aggregated_results['imports']:
+                if imp in class_info['docstring']:
+                    class_info['used_imports'].append(imp)
+
+            # Assigning methods to class (including tracking imports used within methods)
+            for method in class_info["methods"]:
+                method_info = next(func for func in functions if func["name"] == method)
+                class_info.setdefault("methods_info", []).append(method_info)
+
             logger.debug(f"Class info: {class_info}")
             classes.append(class_info)
 
@@ -120,7 +190,7 @@ def parse_python_file(file_path: str):
     # Extracting variables (assignments)
     variables = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):  # Add AugAssign and AnnAssign
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     logger.debug(f"Found variable assignment: {target.id} = {ast.dump(node.value)}")
@@ -149,7 +219,6 @@ def parse_python_file(file_path: str):
         "variables": variables
     }
 
-
 def extract_function_calls(function_node):
     """Helper function to extract function calls within a function."""
     logger.debug(f"Extracting function calls from: {function_node.name}")
@@ -167,81 +236,3 @@ def extract_function_calls(function_node):
     
     logger.debug(f"Function calls: {calls}")
     return calls
-
-import json
-import os
-from datetime import datetime
-
-def save_parsed_data(parsed_data, logs_dir="logs"):
-    """
-    Save the parsed data into separate files for functions, classes, imports, and variables.
-
-    Args:
-        parsed_data (dict): Parsed data containing 'functions', 'classes', 'imports', and 'variables'.
-        logs_dir (str): Path to the logs directory where files will be saved. Defaults to 'logs'.
-
-    Returns:
-        None
-    """
-    # Create a timestamped subdirectory under the logs directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join(logs_dir, f"parsed_data_{timestamp}")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # File mappings
-    data_files = {
-        "functions": "functions.json",
-        "classes": "classes.json",
-        "imports": "imports.json",
-        "variables": "variables.json",
-    }
-
-    # Write each category to its respective file
-    for key, filename in data_files.items():
-        file_path = os.path.join(output_dir, filename)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(parsed_data.get(key, []), f, indent=4)
-        
-        print(f"Saved {key} data to {file_path}")
-
-# Example of invoking the function:
-# save_parsed_data({
-#     "functions": [{"name": "example_function", "args": [], "returns": "None"}],
-#     "classes": [{"name": "ExampleClass", "methods": []}],
-#     "imports": ["os", "json"],
-#     "variables": [{"name": "example_var", "value": "42"}]
-# })
-
-
-import os
-import json
-
-def save_parsed_data_jsonl(parsed_data, logs_dir="logs"):
-    """
-    Save the aggregated parsed data into separate JSONL files.
-    """
-    output_dir = os.path.join(logs_dir, "parsed_data")
-    os.makedirs(output_dir, exist_ok=True)
-
-    data_files = {
-        "functions": "functions.jsonl",
-        "classes": "classes.jsonl",
-        "imports": "imports.jsonl",
-        "variables": "variables.jsonl",
-    }
-
-    for key, filename in data_files.items():
-        file_path = os.path.join(output_dir, filename)
-        
-        # Open file in write mode
-        logger.info(f"Writing {key} data to {file_path}...")
-        
-        # Debugging: print the data size
-        logger.debug(f"{key.capitalize()} data size: {len(parsed_data.get(key, []))}")
-
-        with open(file_path, "a", encoding="utf-8") as f:
-            for item in parsed_data.get(key, []):
-                f.write(json.dumps(item) + "\n")
-                logger.debug(f"Wrote {json.dumps(item)} to {file_path}")
-
-        logger.info(f"Saved {key} data to {file_path}")

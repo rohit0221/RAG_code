@@ -39,8 +39,15 @@ def store_in_graphdb(parsed_code):
         # Create function nodes and relationships
         for func in functions:
             session.write_transaction(create_function_node, func)
+            # Create relationships for function calls
             for call in func['calls']:
                 session.write_transaction(create_function_call_relationship, func['name'], call)
+            # Create relationships for used imports
+            for used_import in func['used_imports']:
+                session.write_transaction(create_function_import_relationship, func['name'], used_import)
+            # Create relationships for used variables
+            for used_var in func['used_variables']:
+                session.write_transaction(create_function_variable_relationship, func['name'], used_var)
         
         # Create class nodes and relationships
         for cls in classes:
@@ -72,6 +79,22 @@ def create_function_call_relationship(tx, func_name, call_name):
         MERGE (func)-[:CALLS]->(call)
         """, func_name=func_name, call_name=call_name)
 
+def create_function_import_relationship(tx, func_name, import_name):
+    """Create a relationship for imports used within a function."""
+    tx.run("""
+        MERGE (func:Function {name: $func_name})
+        MERGE (imp:Import {name: $import_name})
+        MERGE (func)-[:USES_IMPORT]->(imp)
+        """, func_name=func_name, import_name=import_name)
+
+def create_function_variable_relationship(tx, func_name, var_name):
+    """Create a relationship for variables used within a function."""
+    tx.run("""
+        MERGE (func:Function {name: $func_name})
+        MERGE (var:Variable {name: $var_name})
+        MERGE (func)-[:USES_VARIABLE]->(var)
+        """, func_name=func_name, var_name=var_name)
+
 def create_class_node(tx, cls):
     """Create a node for a class."""
     tx.run("""
@@ -89,3 +112,13 @@ def create_import_node(tx, imp):
     tx.run("""
         MERGE (imp:Import {name: $name})
         """, name=imp)
+
+def clear_graphdb():
+    """Clear all nodes and relationships in the Neo4j graph database."""
+    with driver.session() as session:
+        # Delete all nodes and relationships
+        session.run("MATCH (n) DETACH DELETE n")
+        logger.info("Cleared the Neo4j database.")
+
+# Call this at the start of your workflow
+clear_graphdb()
